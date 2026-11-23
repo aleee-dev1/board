@@ -1,0 +1,15 @@
+{
+  "name": "detective-board",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A movie-style detective board with draggable notes, images and red strings.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "sqlite3": "^5.1.7"
+  }
+}
