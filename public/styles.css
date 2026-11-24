@@ -4,6 +4,10 @@
   font-display: swap;
 }
 
+:root {
+  --dock-offset: 78px;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -518,7 +522,7 @@ body.panning .note-text {
 
 #confirm-bar {
   position: absolute;
-  bottom: 78px;
+  bottom: var(--dock-offset);
   left: 50%;
   transform: translateX(-50%);
   z-index: 101;
@@ -660,7 +664,7 @@ body.panning .note-text {
 
 #hint {
   position: absolute;
-  bottom: 78px;
+  bottom: var(--dock-offset);
   left: 50%;
   transform: translateX(-50%);
   z-index: 100;
@@ -675,4 +679,49 @@ body.panning .note-text {
 
 #hint[hidden] {
   display: none;
+}
+
+@media (pointer: coarse) {
+  #toolbar {
+    padding: 6px 12px;
+  }
+
+  #toolbar button,
+  #pagination button {
+    width: 40px;
+    height: 40px;
+  }
+
+  .item-actions button,
+  #selection-box button {
+    width: 40px;
+    height: 40px;
+  }
+}
+
+@media (max-width: 760px) {
+  #toolbar {
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: calc(100vw - 20px);
+    row-gap: 6px;
+    padding: 6px 10px;
+    white-space: normal;
+  }
+
+  #toolbar .brand {
+    display: none;
+  }
+
+  .group + .group {
+    border-left: 0;
+    padding-left: 0;
+  }
+
+  #hint,
+  #confirm-bar {
+    max-width: calc(100vw - 24px);
+    text-align: center;
+    white-space: normal;
+  }
 }

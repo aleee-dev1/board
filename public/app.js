@@ -42,6 +42,9 @@ const HINTS = {
 };
 
 let drag = null;
+const activePointers = new Map();
+let longPressTimer = null;
+let touchHintShown = false;
 const saveTimers = new Map();
 let settingsTimer = null;
 let hintTimer = null;
@@ -158,20 +161,45 @@ function worldToScreen(wx, wy) {
   };
 }
 
-function zoomAt(factor, clientX, clientY) {
+function setZoomAt(nextScale, clientX, clientY) {
   const rect = boardRect();
   const sx = clientX - rect.left;
   const sy = clientY - rect.top;
   const wx = (sx - state.camera.x) / state.camera.scale;
   const wy = (sy - state.camera.y) / state.camera.scale;
+  const next = Math.min(3, Math.max(0.25, nextScale));
 
-  const next = Math.min(3, Math.max(0.25, state.camera.scale * factor));
   state.camera.scale = next;
   state.camera.x = sx - wx * next;
   state.camera.y = sy - wy * next;
 
   applyCamera();
   scheduleSaveSettings();
+}
+
+function zoomAt(factor, clientX, clientY) {
+  setZoomAt(state.camera.scale * factor, clientX, clientY);
+}
+
+// Moves the board content by dx/dy on screen (positive dx = content goes right).
+function panBy(dx, dy) {
+  state.camera.x += dx;
+  state.camera.y += dy;
+  applyCamera();
+  scheduleSaveSettings();
+}
+
+function pointerPair() {
+  const points = [...activePointers.values()];
+  return points.length >= 2 ? [points[0], points[1]] : null;
+}
+
+function pointDistance(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function pointMidpoint(a, b) {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 }
 
 function zoomFromCenter(factor) {
@@ -437,6 +465,14 @@ function updateSelectionBox() {
   selectionBox.style.height = `${bottom - top + pad * 2}px`;
   selectionBox.hidden = false;
 }
+
+function updateDockOffset() {
+  const toolbar = document.getElementById('toolbar');
+  const height = toolbar.getBoundingClientRect().height;
+  document.documentElement.style.setProperty('--dock-offset', `${Math.ceil(height) + 26}px`);
+}
+
+window.addEventListener('resize', updateDockOffset);
 
 function updatePagination() {
   slotLabel.textContent = state.currentSlot;
@@ -967,6 +1003,8 @@ function onItemPointerDown(e) {
   const el = e.currentTarget;
   const id = el.dataset.id;
   e.stopPropagation();
+  clearTimeout(longPressTimer);
+  if (activePointers.size >= 2) return; // second finger: pinch takes priority
 
   if (state.selectedIds.size > 0) {
     if (e.button !== 0) return;
@@ -1041,6 +1079,7 @@ function onResizePointerDown(e) {
 
 board.addEventListener('pointerdown', (e) => {
   if (e.target.closest('#toolbar') || e.target.closest('#confirm-bar') || e.target.closest('#selection-box')) return;
+  if (e.pointerType === 'touch' && activePointers.size >= 2) return;
   if (e.button !== 0) return;
 
   if (state.tool === 'note') {
@@ -1060,6 +1099,34 @@ board.addEventListener('pointerdown', (e) => {
   state.pendingLinkFrom = null;
 
   if (state.tool === 'select') {
+    if (e.pointerType === 'touch') {
+      clearTimeout(longPressTimer);
+      drag = {
+        kind: 'touch-pan',
+        startX: e.clientX,
+        startY: e.clientY,
+        lastX: e.clientX,
+        lastY: e.clientY,
+        moved: false,
+      };
+      longPressTimer = setTimeout(() => {
+        if (!drag || drag.kind !== 'touch-pan') return;
+        drag = { kind: 'select', startX: e.clientX, startY: e.clientY, endX: e.clientX, endY: e.clientY, moved: false };
+        const origin = boardRect();
+        rubberBand.style.left = `${e.clientX - origin.left}px`;
+        rubberBand.style.top = `${e.clientY - origin.top}px`;
+        rubberBand.style.width = '1px';
+        rubberBand.style.height = '1px';
+        rubberBand.classList.add('active');
+        if (navigator.vibrate) navigator.vibrate(15);
+      }, 400);
+      if (!touchHintShown) {
+        touchHintShown = true;
+        hint.innerHTML = 'Drag to pan &middot; hold to select an area &middot; pinch to zoom';
+        showHint(3000);
+      }
+      return;
+    }
     drag = { kind: 'select', startX: e.clientX, startY: e.clientY, endX: e.clientX, endY: e.clientY, moved: false };
     return;
   }
@@ -1067,6 +1134,24 @@ board.addEventListener('pointerdown', (e) => {
 });
 
 window.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'touch') {
+    if (e.target.closest('#toolbar, #confirm-bar, #selection-box')) return;
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (activePointers.size >= 2) {
+      clearTimeout(longPressTimer);
+      const pair = pointerPair();
+      const middle = pointMidpoint(pair[0], pair[1]);
+      const world = screenToWorld(middle.x, middle.y);
+      drag = {
+        kind: 'pinch',
+        startDist: Math.max(1, pointDistance(pair[0], pair[1])),
+        startScale: state.camera.scale,
+        worldX: world.x,
+        worldY: world.y,
+      };
+      return;
+    }
+  }
   if (e.button !== 2) return;
   e.preventDefault();
   document.body.classList.add('panning');
@@ -1074,7 +1159,38 @@ window.addEventListener('pointerdown', (e) => {
 }, true);
 
 window.addEventListener('pointermove', (e) => {
+  if (e.pointerType === 'touch' && activePointers.has(e.pointerId)) {
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  }
   if (!drag) return;
+
+  if (drag.kind === 'pinch') {
+    const pair = pointerPair();
+    if (!pair) return;
+    const distance = Math.max(1, pointDistance(pair[0], pair[1]));
+    const scale = Math.min(3, Math.max(0.25, drag.startScale * (distance / drag.startDist)));
+    const middle = pointMidpoint(pair[0], pair[1]);
+    const origin = boardRect();
+    state.camera.scale = scale;
+    state.camera.x = (middle.x - origin.left) - drag.worldX * scale;
+    state.camera.y = (middle.y - origin.top) - drag.worldY * scale;
+    applyCamera();
+    scheduleSaveSettings();
+    return;
+  }
+
+  if (drag.kind === 'touch-pan') {
+    const dx = e.clientX - drag.lastX;
+    const dy = e.clientY - drag.lastY;
+    drag.lastX = e.clientX;
+    drag.lastY = e.clientY;
+    if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 8) {
+      drag.moved = true;
+      clearTimeout(longPressTimer);
+    }
+    panBy(dx, dy);
+    return;
+  }
 
   if (drag.kind === 'pan') {
     state.camera.x += e.clientX - drag.lastX;
@@ -1135,9 +1251,34 @@ window.addEventListener('pointermove', (e) => {
   }
 });
 
-window.addEventListener('pointerup', () => {
+function onPointerEnd(e) {
+  clearTimeout(longPressTimer);
+  if (e.pointerType === 'touch') activePointers.delete(e.pointerId);
   document.body.classList.remove('panning');
   if (!drag) return;
+
+  if (drag.kind === 'pinch') {
+    const remaining = [...activePointers.values()];
+    if (remaining.length === 1) {
+      drag = {
+        kind: 'touch-pan',
+        startX: remaining[0].x,
+        startY: remaining[0].y,
+        lastX: remaining[0].x,
+        lastY: remaining[0].y,
+        moved: true,
+      };
+      return;
+    }
+    drag = null;
+    return;
+  }
+
+  if (drag.kind === 'touch-pan') {
+    if (!drag.moved) clearSelection();
+    drag = null;
+    return;
+  }
 
   if (drag.kind === 'select') {
     rubberBand.classList.remove('active');
@@ -1163,11 +1304,28 @@ window.addEventListener('pointerup', () => {
   }
 
   drag = null;
-});
+}
+
+window.addEventListener('pointerup', onPointerEnd);
+window.addEventListener('pointercancel', onPointerEnd);
 
 board.addEventListener('wheel', (e) => {
   e.preventDefault();
-  zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX, e.clientY);
+
+  // Trackpad pinch is delivered as wheel + ctrlKey.
+  if (e.ctrlKey) {
+    setZoomAt(state.camera.scale * Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);
+    return;
+  }
+
+  // Trackpad two-finger scroll pans; a mouse wheel (large or line-based delta) zooms.
+  const trackpad = e.deltaMode === 0 && (e.deltaX !== 0 || Math.abs(e.deltaY) < 40);
+  if (trackpad) {
+    panBy(-e.deltaX, -e.deltaY);
+  } else {
+    const step = e.deltaMode === 1 ? 0.05 : 0.0015;
+    zoomAt(Math.exp(-e.deltaY * step), e.clientX, e.clientY);
+  }
 }, { passive: false });
 
 board.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -1421,6 +1579,7 @@ window.addEventListener('keydown', (e) => {
 
 async function init() {
   try {
+    updateDockOffset();
     if (document.fonts && document.fonts.ready) await document.fonts.ready;
     const first = await api('/api/board?slot=1');
     const slotCount = Math.max(1, Number(first.settings.slotCount) || 1);

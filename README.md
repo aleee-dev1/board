@@ -13,6 +13,12 @@ Then open <http://localhost:3000>. Run the server in the foreground in your own 
 
 Everything is saved automatically to `data/board.db` (a SQLite file with `-wal`/`-shm` siblings). Camera position, zoom and the Retro toggle are saved too. Set `DB_PATH=/path/to/other.db` to use a different database file.
 
+## Trackpad and touch
+
+**Touchpad:** pinch zooms toward the gesture center (delivered as Ctrl+wheel); two-finger scroll pans. A mouse wheel still zooms toward the cursor — the code distinguishes them by delta size/direction, so if your wheel feels wrong, that heuristic is the thing to tune.
+
+**Touchscreen:** one finger on an item moves it (or the whole selection); one finger on empty space pans; two fingers pinch to zoom and drag to pan; tap to select/deselect. **Long-press empty space (~400ms)** starts the marquee selection box. First touch shows a short hint. Buttons get larger hit targets on coarse pointers.
+
 ## Boards
 
 Boards are anonymous slots, like desktop workspaces. The toolbar's last group shows `< 2 >` plus a clear button:
