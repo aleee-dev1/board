@@ -35,7 +35,7 @@ function resetHistory() {
 async function cacheImage(item) {
   if (!item || item.type !== 'image' || imageCache.has(item.id)) return;
   try {
-    const response = await fetch(`/api/items/${item.id}/image`);
+    const response = await fetchImage(item.id);
     if (!response.ok) return;
     const blob = await response.blob();
     const dataUrl = await new Promise((resolve, reject) => {

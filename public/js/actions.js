@@ -23,7 +23,7 @@ async function downloadSelected() {
       return;
     }
 
-    const response = await fetch(`/api/items/${id}/image`);
+    const response = await fetchImage(id);
     if (!response.ok) throw new Error('Could not fetch image');
     const blob = await response.blob();
     const fallbackExt = (item.mime || 'image/png').split('/')[1] || 'png';

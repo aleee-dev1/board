@@ -36,7 +36,7 @@ function createItemElement(item) {
     el.appendChild(textarea);
   } else {
     const img = document.createElement('img');
-    img.src = `/api/items/${item.id}/image`;
+    img.src = imageUrl(item.id);
     img.alt = 'evidence';
     img.draggable = false;
     el.appendChild(img);
