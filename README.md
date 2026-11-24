@@ -28,7 +28,8 @@ Each slot stores its own items, links, camera and Retro setting, all in the same
 | Action | How |
 | --- | --- |
 | Select / move | **Select** tool (V), then left-drag an item |
-| Multi-select | With the **Select** tool, drag an empty area of the board to rubber-band several items. They can only be deleted together; clicking empty space or Esc clears the selection |
+| Multi-select | With the **Select** tool, drag an empty area of the board to rubber-band several items. Drag any selected item to move the whole group; taped items stay put. A dashed box appears around them with a single trash button. Esc or clicking empty space clears it |
+| Undo / redo | Toolbar ↶ / ↷ buttons, or Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y also redoes). **Session only** — the stack is in memory, so it is empty after a refresh or reopen, and resets when you switch boards. Up to 30 steps |
 | Rotate | Drag the round handle above a selected item (hold Shift to snap to 15°) |
 | Add note | **Note** tool (N), then click the board and type. Double-click a note to edit it again |
 | Grow / widen note | Notes grow downward automatically as you type; drag the grip on the right edge of a selected note to change its width (text reflows live) |
@@ -50,7 +51,8 @@ The camera position and zoom are saved with the board and restored on reload.
 - Express server (`server.js`), vanilla frontend in `public/`
 - `sqlite3` for storage (`db.js`) — single board, items and links in SQLite
 - Images are stored in the DB **exactly as uploaded** (no downscaling); original filenames are kept so downloads use them. They're served from `/api/items/:id/image`
-- Selecting an item reveals Download and Delete buttons floating on the item itself; notes download as `.txt`, images as their original file. With a multi-selection, only Delete appears on each item
+- Selecting a single item reveals a Download button and an **eraser** button floating on the item itself; notes download as `.txt`, images as their original file
+- The toolbar's board-clear control also uses an **eraser** icon; a **trash** icon appears only on the multi-selection box, where it deletes the whole selected group
 - Red strings are an SVG layer inside the transformed world, so they follow the items automatically
 - Retro look = fine paper grain plus generated wear cracks: white chips/cracks on photos, blue cracks on the yellow notes. The pattern is deterministic per item so it survives reloads. The global Retro toggle turns it all off
 - Notes auto-grow vertically; the right-edge grip resizes width and reflows text live

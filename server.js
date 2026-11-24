@@ -39,6 +39,10 @@ function num(value, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function validId(value) {
+  return typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value) ? value : null;
+}
+
 function slotOf(req) {
   const raw = req.query.slot ?? (req.body && req.body.slot);
   const n = Number(raw);
@@ -125,7 +129,7 @@ app.post('/api/items', route(async (req, res) => {
   }
 
   const item = {
-    id: crypto.randomUUID(),
+    id: validId(body.id) || crypto.randomUUID(),
     type: body.type,
     x: num(body.x, 0),
     y: num(body.y, 0),
@@ -225,7 +229,7 @@ app.post('/api/links', route(async (req, res) => {
     return res.status(200).json({ id: existing.id, a, b, removed: true });
   }
 
-  const link = { id: crypto.randomUUID(), a, b, slot };
+  const link = { id: validId(req.body && req.body.id) || crypto.randomUUID(), a, b, slot };
   await store.run('INSERT INTO links (id, a, b, slot) VALUES (?, ?, ?, ?)', [link.id, link.a, link.b, link.slot]);
   res.status(201).json(link);
 }));

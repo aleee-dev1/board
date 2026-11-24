@@ -80,6 +80,52 @@ body.panning .note-text {
   display: block;
 }
 
+#selection-box {
+  position: absolute;
+  z-index: 58;
+  pointer-events: none;
+  border: 2px dashed #ffd36e;
+  border-radius: 4px;
+  box-shadow: 0 0 0 5px rgba(255, 180, 60, 0.12);
+}
+
+#selection-box[hidden] {
+  display: none;
+}
+
+#selection-box button {
+  position: absolute;
+  top: -15px;
+  right: -15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid #6b4a2f;
+  background: linear-gradient(#3a2a1d, #24180f);
+  color: #e8a08a;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+}
+
+#selection-box button:hover {
+  background: #5a3d27;
+}
+
+#selection-box button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* ---------- world + items ---------- */
 
 #world {
@@ -149,7 +195,7 @@ body.panning .note-text {
   pointer-events: auto;
 }
 
-.item.multi-selected .item-actions .download-action {
+.item.multi-selected .item-actions {
   display: none;
 }
 
@@ -592,8 +638,13 @@ body.panning .note-text {
   outline-offset: 2px;
 }
 
-#toolbar button:hover {
+#toolbar button:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.12);
+}
+
+#toolbar button:disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 
 #toolbar button.active,

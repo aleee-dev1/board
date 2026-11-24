@@ -6,7 +6,10 @@ const hint = document.getElementById('hint');
 const confirmBar = document.getElementById('confirm-bar');
 const confirmMessage = document.getElementById('confirm-message');
 const rubberBand = document.getElementById('rubber-band');
+const selectionBox = document.getElementById('selection-box');
 const slotLabel = document.getElementById('slotLabel');
+const undoButton = document.getElementById('undoButton');
+const redoButton = document.getElementById('redoButton');
 const slotPrev = document.getElementById('slotPrev');
 const slotNext = document.getElementById('slotNext');
 const clearBoardButton = document.getElementById('clearBoard');
@@ -44,6 +47,12 @@ let settingsTimer = null;
 let hintTimer = null;
 let switchingSlot = false;
 const crackCache = new Map();
+const imageCache = new Map();
+
+const HISTORY_LIMIT = 30;
+const history = { past: [], future: [] };
+let lastCommitted = null;
+let suppressHistory = false;
 
 // Deterministic per-item cracks so the wear pattern never jumps between reloads.
 function seededRandom(seedText) {
@@ -130,6 +139,7 @@ function boardRect() {
 function applyCamera() {
   const { x, y, scale } = state.camera;
   world.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+  updateSelectionBox();
 }
 
 function screenToWorld(clientX, clientY) {
@@ -203,6 +213,7 @@ function saveItem(item) {
       caption: item.caption,
     }),
   }).catch((err) => console.warn('Could not save item', err));
+  maybeCommitHistory();
 }
 
 function scheduleSaveItem(item) {
@@ -237,6 +248,196 @@ async function flushSaves() {
   await saveSettings();
 }
 
+// ---------- session undo / redo ----------
+
+function snapshot() {
+  return {
+    items: [...state.items.values()].map((item) => ({ ...item })),
+    links: state.links.map((link) => ({ ...link })),
+  };
+}
+
+function updateHistoryButtons() {
+  undoButton.disabled = history.past.length === 0;
+  redoButton.disabled = history.future.length === 0;
+}
+
+function maybeCommitHistory() {
+  if (suppressHistory) return;
+  const current = snapshot();
+  if (lastCommitted && JSON.stringify(current) === JSON.stringify(lastCommitted)) return;
+  if (lastCommitted) {
+    history.past.push(lastCommitted);
+    if (history.past.length > HISTORY_LIMIT) history.past.shift();
+    history.future = [];
+  }
+  lastCommitted = current;
+  updateHistoryButtons();
+}
+
+function resetHistory() {
+  history.past = [];
+  history.future = [];
+  lastCommitted = snapshot();
+  updateHistoryButtons();
+}
+
+async function cacheImage(item) {
+  if (!item || item.type !== 'image' || imageCache.has(item.id)) return;
+  try {
+    const response = await fetch(`/api/items/${item.id}/image`);
+    if (!response.ok) return;
+    const blob = await response.blob();
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+    imageCache.set(item.id, dataUrl);
+  } catch (err) {
+    console.warn('Could not cache image for undo', err);
+  }
+}
+
+async function syncToSnapshot(target) {
+  const current = snapshot();
+  const currentIds = new Set(current.items.map((item) => item.id));
+  const targetIds = new Set(target.items.map((item) => item.id));
+
+  for (const item of current.items) {
+    if (!targetIds.has(item.id)) {
+      await api(`/api/items/${item.id}?slot=${state.currentSlot}`, { method: 'DELETE' });
+    }
+  }
+
+  for (const item of target.items) {
+    if (currentIds.has(item.id)) continue;
+    const payload = { ...item, slot: state.currentSlot };
+    if (item.type === 'image') {
+      const dataUrl = imageCache.get(item.id);
+      if (!dataUrl) {
+        console.warn('Missing cached image for', item.id);
+        continue;
+      }
+      payload.imageBase64 = dataUrl.split(',')[1] || dataUrl;
+    }
+    await api(`/api/items?slot=${state.currentSlot}`, { method: 'POST', body: JSON.stringify(payload) });
+  }
+
+  for (const item of target.items) {
+    const previous = current.items.find((entry) => entry.id === item.id);
+    if (!previous || JSON.stringify(previous) === JSON.stringify(item)) continue;
+    await api(`/api/items/${item.id}?slot=${state.currentSlot}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        x: item.x, y: item.y, width: item.width, height: item.height,
+        rotation: item.rotation, z: item.z, text: item.text, color: item.color,
+        retro: item.retro, taped: item.taped, caption: item.caption,
+      }),
+    });
+  }
+
+  const currentLinkIds = new Set(current.links.map((link) => link.id));
+  const targetLinkIds = new Set(target.links.map((link) => link.id));
+
+  for (const link of current.links) {
+    if (!targetLinkIds.has(link.id)) {
+      await api(`/api/links/${link.id}?slot=${state.currentSlot}`, { method: 'DELETE' });
+    }
+  }
+  for (const link of target.links) {
+    if (currentLinkIds.has(link.id)) continue;
+    await api(`/api/links?slot=${state.currentSlot}`, {
+      method: 'POST',
+      body: JSON.stringify({ id: link.id, a: link.a, b: link.b }),
+    });
+  }
+}
+
+async function applySnapshot(target) {
+  await syncToSnapshot(target);
+
+  for (const el of state.els.values()) el.remove();
+  state.els.clear();
+  state.items.clear();
+  for (const item of target.items) state.items.set(item.id, { ...item });
+  state.links = target.links.map((link) => ({ ...link }));
+  state.selectedId = null;
+  state.selectedIds.clear();
+  state.editingId = null;
+  state.pendingLinkFrom = null;
+
+  renderAll();
+  for (const item of state.items.values()) fitNote(item);
+}
+
+async function undo() {
+  if (suppressHistory || !history.past.length) return;
+  suppressHistory = true;
+  try {
+    const target = history.past.pop();
+    history.future.push(snapshot());
+    await applySnapshot(target);
+    lastCommitted = snapshot();
+    updateHistoryButtons();
+  } catch (err) {
+    console.warn('Undo failed', err);
+  } finally {
+    suppressHistory = false;
+  }
+}
+
+async function redo() {
+  if (suppressHistory || !history.future.length) return;
+  suppressHistory = true;
+  try {
+    const target = history.future.pop();
+    history.past.push(snapshot());
+    await applySnapshot(target);
+    lastCommitted = snapshot();
+    updateHistoryButtons();
+  } catch (err) {
+    console.warn('Redo failed', err);
+  } finally {
+    suppressHistory = false;
+  }
+}
+
+function updateSelectionBox() {
+  const ids = [...state.selectedIds];
+  if (ids.length < 2) {
+    selectionBox.hidden = true;
+    return;
+  }
+
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const id of ids) {
+    const el = state.els.get(id);
+    if (!el) continue;
+    const rect = el.getBoundingClientRect();
+    left = Math.min(left, rect.left);
+    top = Math.min(top, rect.top);
+    right = Math.max(right, rect.right);
+    bottom = Math.max(bottom, rect.bottom);
+  }
+  if (!Number.isFinite(left)) {
+    selectionBox.hidden = true;
+    return;
+  }
+
+  const origin = board.getBoundingClientRect();
+  const pad = 8;
+  selectionBox.style.left = `${left - origin.left - pad}px`;
+  selectionBox.style.top = `${top - origin.top - pad}px`;
+  selectionBox.style.width = `${right - left + pad * 2}px`;
+  selectionBox.style.height = `${bottom - top + pad * 2}px`;
+  selectionBox.hidden = false;
+}
+
 function updatePagination() {
   slotLabel.textContent = state.currentSlot;
   slotPrev.disabled = state.currentSlot <= 1;
@@ -256,6 +457,7 @@ async function goToSlot(slot) {
 }
 
 async function loadSlot(slot, preloaded = null) {
+  suppressHistory = true;
   const data = preloaded || await api(`/api/board?slot=${slot}`);
 
   for (const el of state.els.values()) el.remove();
@@ -291,6 +493,8 @@ async function loadSlot(slot, preloaded = null) {
   renderAll();
   for (const item of state.items.values()) fitNote(item);
   saveSettings();
+  resetHistory(); // history is session-only and resets on load / board switch
+  suppressHistory = false;
 }
 
 // Notes grow downward as text is typed and reflow when their width changes.
@@ -311,6 +515,7 @@ function fitNote(item) {
     el.style.height = `${needed}px`;
     scheduleSaveItem(item);
   }
+  updateSelectionBox();
 }
 
 // Caption length is capped by how much width the photo's white strip provides,
@@ -452,8 +657,8 @@ function createItemElement(item) {
     <button class="download-action" title="Download" aria-label="Download">
       <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 20h16"/></svg>
     </button>
-    <button class="delete-action" title="Delete" aria-label="Delete">
-      <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14"/><path d="M10 11v6M14 11v6"/></svg>
+    <button class="delete-action" title="Erase item" aria-label="Erase item">
+      <svg viewBox="0 0 24 24"><path d="M8 20L4 16l9-9 7 7-8 6z"/><path d="M13 7l4 4"/><path d="M4 20h16"/></svg>
     </button>
   `;
   actions.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -517,6 +722,8 @@ function renderItem(item) {
     }
     caption.readOnly = state.editingId !== item.id;
   }
+
+  updateSelectionBox();
 }
 
 function renderStrings() {
@@ -538,6 +745,7 @@ function renderStrings() {
 function renderAll() {
   for (const item of state.items.values()) renderItem(item);
   renderStrings();
+  updateSelectionBox();
   updatePagination();
 }
 
@@ -621,6 +829,7 @@ function addLocalItem(item) {
   fitNote(item);
   renderStrings();
   updatePagination();
+  maybeCommitHistory();
 }
 
 function readAsDataURL(file) {
@@ -679,6 +888,7 @@ async function addImageFile(file, offset = 0) {
     };
 
     const created = await api(`/api/items?slot=${state.currentSlot}`, { method: 'POST', body: JSON.stringify(item) });
+    imageCache.set(created.id, prepared.dataUrl);
     addLocalItem(created);
     select(created.id);
   } catch (err) {
@@ -740,6 +950,7 @@ async function handleStringClick(id) {
   }
   state.pendingLinkFrom = id; // keep the last item highlighted so strings can be chained
   renderAll();
+  maybeCommitHistory();
 }
 
 function toggleTape(id) {
@@ -757,7 +968,20 @@ function onItemPointerDown(e) {
   const id = el.dataset.id;
   e.stopPropagation();
 
-  if (state.selectedIds.size > 0) return; // multi-selection: only deletion is allowed
+  if (state.selectedIds.size > 0) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const origins = [];
+    for (const selectedId of state.selectedIds) {
+      const selectedItem = state.items.get(selectedId);
+      if (selectedItem && !selectedItem.taped) {
+        origins.push({ item: selectedItem, x: selectedItem.x, y: selectedItem.y });
+      }
+    }
+    if (!origins.length) return;
+    drag = { kind: 'move-group', startX: e.clientX, startY: e.clientY, origins };
+    return;
+  }
 
   if (state.tool === 'string') {
     handleStringClick(id);
@@ -816,7 +1040,7 @@ function onResizePointerDown(e) {
 }
 
 board.addEventListener('pointerdown', (e) => {
-  if (e.target.closest('#toolbar') || e.target.closest('#confirm-bar')) return;
+  if (e.target.closest('#toolbar') || e.target.closest('#confirm-bar') || e.target.closest('#selection-box')) return;
   if (e.button !== 0) return;
 
   if (state.tool === 'note') {
@@ -877,6 +1101,18 @@ window.addEventListener('pointermove', (e) => {
     return;
   }
 
+  if (drag.kind === 'move-group') {
+    const dx = (e.clientX - drag.startX) / state.camera.scale;
+    const dy = (e.clientY - drag.startY) / state.camera.scale;
+    for (const origin of drag.origins) {
+      origin.item.x = origin.x + dx;
+      origin.item.y = origin.y + dy;
+      renderItem(origin.item);
+    }
+    renderStrings();
+    return;
+  }
+
   const item = state.items.get(drag.id);
   if (!item) return;
 
@@ -920,6 +1156,8 @@ window.addEventListener('pointerup', () => {
     } else {
       clearSelection();
     }
+  } else if (drag.kind === 'move-group') {
+    for (const origin of drag.origins) saveItem(origin.item);
   } else if (drag.kind === 'move' || drag.kind === 'rotate' || drag.kind === 'resize') {
     saveItem(state.items.get(drag.id));
   }
@@ -977,6 +1215,13 @@ document.getElementById('retroToggle').addEventListener('click', (e) => {
   e.currentTarget.classList.toggle('off', !state.globalRetro);
   scheduleSaveSettings();
 });
+
+document.getElementById('multiDelete').addEventListener('pointerdown', (e) => e.stopPropagation());
+document.getElementById('multiDelete').addEventListener('dblclick', (e) => e.stopPropagation());
+document.getElementById('multiDelete').addEventListener('click', deleteSelected);
+
+undoButton.addEventListener('click', undo);
+redoButton.addEventListener('click', redo);
 
 slotPrev.addEventListener('click', () => {
   if (state.currentSlot > 1) goToSlot(state.currentSlot - 1);
@@ -1067,6 +1312,7 @@ function deleteSelected() {
 
 async function performDelete(ids) {
   try {
+    await Promise.all(ids.map((id) => cacheImage(state.items.get(id))));
     await Promise.all(ids.map((id) => api(`/api/items/${id}?slot=${state.currentSlot}`, { method: 'DELETE' })));
     for (const id of ids) {
       state.items.delete(id);
@@ -1079,6 +1325,7 @@ async function performDelete(ids) {
     state.selectedIds.clear();
     state.editingId = null;
     renderAll();
+    maybeCommitHistory();
   } catch (err) {
     console.warn(err);
   }
@@ -1086,6 +1333,7 @@ async function performDelete(ids) {
 
 async function clearCurrentBoard() {
   try {
+    await Promise.all([...state.items.values()].map((item) => cacheImage(item)));
     await api(`/api/boards/${state.currentSlot}/clear`, { method: 'DELETE' });
     for (const el of state.els.values()) el.remove();
     state.els.clear();
@@ -1095,6 +1343,7 @@ async function clearCurrentBoard() {
     state.selectedIds.clear();
     state.editingId = null;
     renderAll();
+    maybeCommitHistory();
   } catch (err) {
     console.warn(err);
     alert('Could not clear the board: ' + err.message);
@@ -1129,6 +1378,13 @@ window.addEventListener('keydown', (e) => {
     const next = tools[(index + step + tools.length) % tools.length];
     setTool(next, false);
     document.querySelector(`.tool[data-tool="${next}"]`).focus();
+    return;
+  }
+
+  if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key.toLowerCase() === 'z' || e.key.toLowerCase() === 'y')) {
+    e.preventDefault();
+    if (e.key.toLowerCase() === 'y' || e.shiftKey) redo();
+    else undo();
     return;
   }
 
