@@ -9,6 +9,7 @@
   let board = null;
   let boot = null;
   let fileName = 'board.db';
+  let isNewBoard = false;
   let saveTimer = null;
   const imageUrls = new Map();
 
@@ -33,7 +34,10 @@
   function updateStatus() {
     if (!board) return;
     const stats = board.stats();
-    setStatus(`${fileName} — ${stats.items} items, ${stats.links} strings. Changes are kept in this browser.`);
+    const note = isNewBoard
+      ? 'New board — download it to keep it.'
+      : 'Changes are kept in this browser.';
+    setStatus(`${fileName} — ${stats.items} items, ${stats.links} strings. ${note}`);
   }
 
   function clearImageUrls() {
@@ -41,24 +45,42 @@
     imageUrls.clear();
   }
 
+  async function activateBoard(nextBoard, name, isNew) {
+    clearImageUrls();
+    board = nextBoard;
+    fileName = name;
+    isNewBoard = isNew;
+    el('downloadDb').disabled = false;
+    el('db-controls').classList.add('has-db');
+    if (!boot) throw new Error('Board UI did not initialise');
+    await boot();
+    updateStatus();
+    scheduleSave();
+  }
+
   async function openFile(file) {
     setStatus(`Opening ${file.name}…`);
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
       const sql = await ensureSQL();
-      clearImageUrls();
-      board = window.LocalBoard.createBoardApi(sql, bytes);
-      fileName = file.name;
-      el('downloadDb').disabled = false;
-      el('db-controls').classList.add('has-db');
-      if (!boot) throw new Error('Board UI did not initialise');
-      await boot();
-      updateStatus();
-      scheduleSave();
+      await activateBoard(window.LocalBoard.createBoardApi(sql, bytes), file.name, false);
     } catch (err) {
       console.error(err);
       setStatus(`Could not open: ${err.message}`);
       alert(`Could not open that database file: ${err.message}`);
+    }
+  }
+
+  // A null database makes createBoardApi build a fresh, empty schema.
+  async function startNewBoard() {
+    setStatus('Starting a new board…');
+    try {
+      const sql = await ensureSQL();
+      await activateBoard(window.LocalBoard.createBoardApi(sql, null), 'board.db', true);
+    } catch (err) {
+      console.error(err);
+      setStatus(`Could not start a new board: ${err.message}`);
+      alert(`Could not start a new board: ${err.message}`);
     }
   }
 
@@ -71,14 +93,17 @@
         const bytes = board.exportBytes();
         const blob = new Blob([bytes], { type: 'application/x-sqlite3' });
         const url = URL.createObjectURL(blob);
+        const name = isNewBoard ? 'board.db' : fileName.replace(/\.db.*$/i, '') + '-edited.db';
         const link = document.createElement('a');
         link.href = url;
-        link.download = fileName.replace(/\.db.*$/i, '') + '-edited.db';
+        link.download = name;
         document.body.appendChild(link);
         link.click();
         link.remove();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
-        setStatus(`Downloaded ${link.download}.`);
+        isNewBoard = false;
+        updateStatus();
+        setStatus(`Downloaded ${name}.`);
       } catch (err) {
         console.error(err);
         setStatus(`Download failed: ${err.message}`);
@@ -135,7 +160,7 @@
 
   document.addEventListener('DOMContentLoaded', async () => {
     window.api = async (url, options = {}) => {
-      if (!board) throw new Error('Open a database file first');
+      if (!board) throw new Error('No board is open yet');
       const result = await board.api(url, options);
       if ((options.method || 'GET').toUpperCase() !== 'GET') scheduleSave();
       updateStatus();
@@ -158,6 +183,12 @@
     };
 
     el('openDb').addEventListener('click', () => el('dbFileInput').click());
+    el('newDb').addEventListener('click', () => {
+      const stats = board && board.stats();
+      if (stats && stats.items > 0 &&
+          !confirm('Start a new empty board? Download the current one first if you want to keep it.')) return;
+      startNewBoard();
+    });
     el('dbFileInput').addEventListener('change', (event) => {
       const file = event.target.files && event.target.files[0];
       if (file) openFile(file);
@@ -165,18 +196,26 @@
     });
     el('downloadDb').addEventListener('click', downloadDb);
 
-    try {
-      const saved = await readSnapshot();
-      if (saved) el('resumeDb').hidden = false;
-    } catch (err) {
-      console.warn('IndexedDB unavailable:', err);
-    }
     el('resumeDb').addEventListener('click', () => {
       readSnapshot().then((blob) => {
         if (blob) return openFile(new File([blob], 'board-restored.db', { type: 'application/x-sqlite3' }));
       }).catch((err) => setStatus(`Could not restore: ${err.message}`));
     });
 
-    setStatus('Choose a board .db file to begin.');
+    // No file chosen and nothing cached? Open an empty board right away so the
+    // app is usable from the first second. It can be downloaded and re-uploaded
+    // later like any other database.
+    try {
+      const saved = await readSnapshot();
+      if (saved) {
+        el('resumeDb').hidden = false;
+        setStatus('Open a .db file, resume your saved copy, or start a new board.');
+      } else {
+        await startNewBoard();
+      }
+    } catch (err) {
+      console.warn('IndexedDB unavailable:', err);
+      await startNewBoard();
+    }
   });
 })();

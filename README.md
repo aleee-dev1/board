@@ -6,11 +6,11 @@ For the hosted, server-owned database version, see the `main` branch.
 
 ## Use it
 
-Open `index.html` directly from disk (double-click it), or upload this folder to any static host. Then:
+Open `index.html` directly from disk (double-click it), or upload this folder to any static host. If you have no database yet, an empty board is created automatically — you don't need a file to start. Then:
 
-1. Click **Open .db** and choose your board's SQLite file.
+1. Click **Open .db** to load an existing SQLite file, or **New .db** to start a fresh empty board at any time.
 2. Use the board normally — notes, photos, strings, tape, captions, multiple boards, undo/redo, camera and Retro filter. Touch and trackpad controls are included.
-3. Click **Download .db** to save the updated, self-contained SQLite file.
+3. Click **Download .db** to save a self-contained SQLite file (`board.db` for a new board, `<name>-edited.db` for an opened one). You can upload that file again later with **Open .db**.
 
 Changes are also checkpointed into IndexedDB while you work, so reloading the page offers **Resume saved copy**. That is only a browser cache; the downloaded file is the real artifact. Only one browser session should edit a file at a time — downloads are last-write-wins.
 
