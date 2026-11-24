@@ -1,6 +1,6 @@
 @font-face {
   font-family: "Special Elite";
-  src: url("/SpecialElite.ttf") format("truetype");
+  src: url("../assets/SpecialElite.ttf") format("truetype");
   font-display: swap;
 }
 
